@@ -1,0 +1,13 @@
+{
+  "name": "CENTRA AI Camera",
+  "short_name": "CENTRA AI",
+  "description": "Your camera. Your movement. Always in frame.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101114",
+  "theme_color": "#101114",
+  "orientation": "any",
+  "icons": [
+    { "src": "/centra-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
