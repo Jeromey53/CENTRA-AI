@@ -2,6 +2,7 @@ import {
   ArrowDown, ArrowRight, ArrowUpRight, Camera, Download, Focus, ScanFace, ShieldCheck, Sparkles, X,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import portraitPreview from '../assets/portrait-preview.svg'
 
 type Props = { onLaunch: () => void }
 type InstallPromptEvent = Event & {
@@ -80,7 +81,7 @@ function HomePage({ onLaunch }: Props) {
           <div className="tracking-window">
             <div className="window-top"><span><span className="live-dot" /> CENTRA LIVE</span><span>AI FRAME / 01</span></div>
             <div className="portrait-scene">
-              <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=960&q=85" alt="Portrait in a camera frame" />
+              <img src={portraitPreview} alt="Illustrated portrait in an AI camera frame" />
               <div className="scene-grid" /><div className="portrait-shade" />
               <div className="focus-box"><span /><span /><span /><span /></div>
               <div className="tracking-label"><span className="live-dot" /> SUBJECT LOCKED <b>98%</b></div>
