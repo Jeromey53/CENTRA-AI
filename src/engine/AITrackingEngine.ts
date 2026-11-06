@@ -1,6 +1,7 @@
 import { FaceDetector, FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
 
 export type TrackingBox = { x: number; y: number; width: number; height: number }
+export type TrackingResult = { bounds: TrackingBox; subjectCount: number }
 export type TrackingOptions = { face: boolean; body: boolean }
 
 const visionWasm = `${import.meta.env.BASE_URL}mediapipe`
@@ -45,18 +46,23 @@ export class AITrackingEngine {
     return new AITrackingEngine(face, pose)
   }
 
-  detect(video: HTMLVideoElement, timestamp: number, options: TrackingOptions): TrackingBox | null {
+  detect(video: HTMLVideoElement, timestamp: number, options: TrackingOptions): TrackingResult | null {
     const boxes: TrackingBox[] = []
+    let faceCount = 0
+    let bodyCount = 0
     if (options.face) {
       const detections = this.face.detectForVideo(video, timestamp).detections
       for (const detection of detections) {
         const bounds = detection.boundingBox
-        if (bounds) boxes.push({
-          x: bounds.originX / video.videoWidth,
-          y: bounds.originY / video.videoHeight,
-          width: bounds.width / video.videoWidth,
-          height: bounds.height / video.videoHeight,
-        })
+        if (bounds) {
+          boxes.push({
+            x: bounds.originX / video.videoWidth,
+            y: bounds.originY / video.videoHeight,
+            width: bounds.width / video.videoWidth,
+            height: bounds.height / video.videoHeight,
+          })
+          faceCount += 1
+        }
       }
     }
     if (options.body) {
@@ -70,7 +76,10 @@ export class AITrackingEngine {
         const top = Math.max(0, Math.min(...ys))
         const right = Math.min(1, Math.max(...xs))
         const bottom = Math.min(1, Math.max(...ys))
-        if (right > left && bottom > top) boxes.push({ x: left, y: top, width: right - left, height: bottom - top })
+        if (right > left && bottom > top) {
+          boxes.push({ x: left, y: top, width: right - left, height: bottom - top })
+          bodyCount += 1
+        }
       }
     }
     if (!boxes.length) return null
@@ -78,7 +87,10 @@ export class AITrackingEngine {
     const top = Math.min(...boxes.map((box) => box.y))
     const right = Math.max(...boxes.map((box) => box.x + box.width))
     const bottom = Math.max(...boxes.map((box) => box.y + box.height))
-    return { x: left, y: top, width: right - left, height: bottom - top }
+    return {
+      bounds: { x: left, y: top, width: right - left, height: bottom - top },
+      subjectCount: Math.max(faceCount, bodyCount),
+    }
   }
 
   close() {

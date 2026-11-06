@@ -4,7 +4,7 @@ import {
   Focus, Maximize, MicOff, Minimize, Pause, Play, RotateCcw, ScanFace, Settings2,
   ShieldCheck, Sparkles, Video, X,
 } from 'lucide-react'
-import { AITrackingEngine, type TrackingBox } from '../engine/AITrackingEngine'
+import { AITrackingEngine, type TrackingResult } from '../engine/AITrackingEngine'
 import { CameraEngine } from '../engine/CameraEngine'
 import { readPreferences, saveRecording, writePreferences } from '../engine/LocalStore'
 import type { CameraPreferences } from '../engine/LocalStore'
@@ -33,9 +33,11 @@ function CameraStudio({ onExit }: Props) {
   const detectorRef = useRef<AITrackingEngine | null>(null)
   const recorderRef = useRef(new VideoRecorder())
   const cropRef = useRef({ x: 0.5, y: 0.5, width: 0.72, height: 0.72 })
-  const detectedRef = useRef<TrackingBox | null>(null)
+  const detectedRef = useRef<TrackingResult | null>(null)
   const lastTrackRef = useRef<{ x: number; y: number; time: number } | null>(null)
   const velocityRef = useRef({ x: 0, y: 0 })
+  const frameOrientationRef = useRef<'landscape' | 'portrait'>('landscape')
+  const orientationCandidateRef = useRef<{ orientation: 'landscape' | 'portrait'; since: number } | null>(null)
   const sourceSizeRef = useRef('')
   const animationFrameRef = useRef(0)
   const lastDetectionRef = useRef(0)
@@ -50,11 +52,14 @@ function CameraStudio({ onExit }: Props) {
   const [mirror, setMirror] = useState(true)
   const [sensitivity, setSensitivity] = useState(55)
   const [zoom, setZoom] = useState(1)
+  const [autoZoom, setAutoZoom] = useState(true)
+  const [autoRotate, setAutoRotate] = useState(true)
+  const [landscapeFrame, setLandscapeFrame] = useState(true)
   const [error, setError] = useState('')
   const [aiReady, setAiReady] = useState(false)
   const [aiError, setAiError] = useState(false)
   const [subjectFound, setSubjectFound] = useState(false)
-    const [sourceSize, setSourceSize] = useState('')
+  const [sourceSize, setSourceSize] = useState('')
   const [recording, setRecording] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [lastRecording, setLastRecording] = useState<Recording | null>(null)
@@ -127,6 +132,8 @@ function CameraStudio({ onExit }: Props) {
         setMirror(preferences.mirror)
         setSensitivity(preferences.sensitivity)
         setZoom(preferences.zoom)
+        setAutoZoom(preferences.autoZoom ?? true)
+        setAutoRotate(preferences.autoRotate ?? true)
       }
       setPreferencesLoaded(true)
     }).catch(() => {
@@ -137,9 +144,9 @@ function CameraStudio({ onExit }: Props) {
 
   useEffect(() => {
     if (!preferencesLoaded) return
-    const preferences: CameraPreferences = { trackingOn, faceOn, bodyOn, mirror, sensitivity, zoom }
+    const preferences: CameraPreferences = { trackingOn, faceOn, bodyOn, mirror, sensitivity, zoom, autoZoom, autoRotate }
     void writePreferences(preferences).catch(() => {})
-  }, [bodyOn, faceOn, mirror, preferencesLoaded, sensitivity, trackingOn, zoom])
+  }, [autoRotate, autoZoom, bodyOn, faceOn, mirror, preferencesLoaded, sensitivity, trackingOn, zoom])
 
   useEffect(() => {
     if (!cameraOn) return
@@ -161,7 +168,7 @@ function CameraStudio({ onExit }: Props) {
           lastDetectionRef.current = now
           try {
             detectedRef.current = detectorRef.current?.detect(video, now, { face: faceOn, body: bodyOn }) ?? null
-            const detection = detectedRef.current
+            const detection = detectedRef.current?.bounds
             if (detection) {
               const centerX = detection.x + detection.width / 2
               const centerY = detection.y + detection.height / 2
@@ -187,41 +194,68 @@ function CameraStudio({ onExit }: Props) {
         const sourceWidth = video.videoWidth
         const sourceHeight = video.videoHeight
         const sourceAspect = sourceWidth / sourceHeight
-        const previewBounds = previewRef.current?.getBoundingClientRect()
-        if (previewBounds?.width && previewBounds.height) {
-          const portrait = previewBounds.height > previewBounds.width
-          const width = portrait ? 720 : 1280
-          const height = portrait ? 1280 : 720
-          if (canvas.width !== width || canvas.height !== height) {
-            canvas.width = width
-            canvas.height = height
+        const detection = trackingOn ? detectedRef.current : null
+        const target = detection?.bounds ?? null
+        const desiredOrientation = !autoRotate || !detection || detection.subjectCount > 1 ? 'landscape' : 'portrait'
+        const orientationCandidate = orientationCandidateRef.current
+        if (desiredOrientation === frameOrientationRef.current) {
+          orientationCandidateRef.current = null
+        } else if (orientationCandidate?.orientation === desiredOrientation) {
+          const holdDuration = desiredOrientation === 'landscape' ? 320 : 520
+          if (now - orientationCandidate.since >= holdDuration) {
+            frameOrientationRef.current = desiredOrientation
+            orientationCandidateRef.current = null
           }
+        } else {
+          orientationCandidateRef.current = { orientation: desiredOrientation, since: now }
+        }
+        const landscape = frameOrientationRef.current === 'landscape'
+        const width = landscape ? 1280 : 720
+        const height = landscape ? 720 : 1280
+        const orientationChanged = canvas.width !== width || canvas.height !== height
+        if (orientationChanged) {
+          canvas.width = width
+          canvas.height = height
+          setLandscapeFrame(landscape)
         }
         const outputAspect = canvas.width / canvas.height
-        const target = trackingOn ? detectedRef.current : null
         const sensitivityFactor = 0.045 + sensitivity / 100 * 0.18
-        let targetWidth = target ? Math.max(target.width * 2.4, target.height * outputAspect / sourceAspect * 1.8) : 0.72 / zoom
-        let targetHeight = target ? Math.max(target.height * 2, target.width * sourceAspect / outputAspect * 1.8) : targetWidth * sourceAspect / outputAspect
-        const ratio = outputAspect / sourceAspect
-        if (targetWidth / targetHeight > ratio) targetHeight = targetWidth / ratio
-        else targetWidth = targetHeight * ratio
-        const maxWidth = Math.min(1, 1 / ratio)
-        const maxHeight = Math.min(1, ratio)
-        targetWidth = clamp(targetWidth / zoom, 0.24, maxWidth)
-        targetHeight = targetWidth / ratio
+        let targetWidth = target
+          ? Math.max(target.width * 2.4, target.height * (outputAspect / sourceAspect) * 2)
+          : 0.72
+        let targetHeight = targetWidth / (outputAspect / sourceAspect)
+        const nearEdge = target && (target.x < 0.12 || target.y < 0.12 || target.x + target.width > 0.88 || target.y + target.height > 0.88)
+        if (autoZoom && nearEdge) {
+          targetWidth *= 1.35
+          targetHeight *= 1.35
+        }
+        const cropAspect = outputAspect / sourceAspect
+        if (targetWidth / targetHeight > cropAspect) targetHeight = targetWidth / cropAspect
+        else targetWidth = targetHeight * cropAspect
+        const maxWidth = Math.min(1, cropAspect)
+        const maxHeight = Math.min(1, 1 / cropAspect)
+        targetWidth = clamp(targetWidth / zoom, Math.min(0.24, maxWidth), maxWidth)
+        targetHeight = targetWidth / cropAspect
         if (targetHeight > maxHeight) {
           targetHeight = maxHeight
-          targetWidth = targetHeight * ratio
+          targetWidth = targetHeight * cropAspect
         }
         const targetX = target ? target.x + target.width / 2 + velocityRef.current.x * 0.12 : 0.5
         const targetY = target ? target.y + target.height / 2 + velocityRef.current.y * 0.12 : 0.5
         const nextX = clamp(targetX, targetWidth / 2, 1 - targetWidth / 2)
         const nextY = clamp(targetY, targetHeight / 2, 1 - targetHeight / 2)
         const crop = cropRef.current
-        crop.width += (targetWidth - crop.width) * sensitivityFactor
-        crop.height += (targetHeight - crop.height) * sensitivityFactor
+        if (orientationChanged) {
+          crop.width = targetWidth
+          crop.height = targetHeight
+        } else {
+          crop.width += (targetWidth - crop.width) * sensitivityFactor
+          crop.height = crop.width / cropAspect
+        }
         crop.x += (nextX - crop.x) * sensitivityFactor
         crop.y += (nextY - crop.y) * sensitivityFactor
+        crop.x = clamp(crop.x, crop.width / 2, 1 - crop.width / 2)
+        crop.y = clamp(crop.y, crop.height / 2, 1 - crop.height / 2)
 
         const sx = (crop.x - crop.width / 2) * sourceWidth
         const sy = (crop.y - crop.height / 2) * sourceHeight
@@ -243,7 +277,7 @@ function CameraStudio({ onExit }: Props) {
       controller.abort()
       cancelAnimationFrame(animationFrameRef.current)
     }
-  }, [aiReady, bodyOn, cameraOn, faceOn, facingMode, mirror, sensitivity, trackingOn, zoom])
+  }, [aiReady, autoRotate, autoZoom, bodyOn, cameraOn, faceOn, facingMode, mirror, sensitivity, trackingOn, zoom])
 
   useEffect(() => {
     if (!recording) return
@@ -283,6 +317,23 @@ function CameraStudio({ onExit }: Props) {
     }
   }
 
+  const capturePhoto = () => {
+    const canvas = canvasRef.current
+    if (!cameraOn || !canvas) return
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setError('Could not capture a photo from the current frame.')
+        return
+      }
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `centra-photo-${new Date().toISOString().replace(/[:.]/g, '-')}.png`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    }, 'image/png')
+  }
+
   const toggleFullscreen = async () => {
     if (!previewRef.current) return
     try {
@@ -306,7 +357,7 @@ function CameraStudio({ onExit }: Props) {
       <div className="studio-layout" id="studio">
         <section className="preview-column">
           <div className="preview-heading"><div><span className="eyebrow">CAMERA STUDIO / 01</span><h1>Find your frame.</h1></div><div className="preview-status"><span className={`status-pip ${cameraOn ? 'active' : ''}`} />{cameraOn ? (aiReady && trackingOn ? (subjectFound ? 'SUBJECT IN FRAME' : 'SEARCHING FOR SUBJECT') : 'CAMERA LIVE') : 'CAMERA OFF'}</div></div>
-          <div className={`camera-preview ${fullscreen ? 'is-fullscreen' : ''}`} ref={previewRef}>
+          <div className={`camera-preview ${fullscreen ? 'is-fullscreen' : ''} ${landscapeFrame ? '' : 'is-portrait'}`} ref={previewRef}>
             <video ref={videoRef} className="source-video" playsInline muted />
             <canvas ref={canvasRef} className={`output-canvas ${cameraOn && !previewMode ? 'visible' : ''}`} width={1280} height={720} />
             {previewMode && lastRecording && <video className="recorded-preview" src={lastRecording.url} controls playsInline autoPlay />}
@@ -324,13 +375,13 @@ function CameraStudio({ onExit }: Props) {
 
           <div className="control-group"><div className="group-title">CAMERA SOURCE</div><label className="select-wrap"><Camera size={15} /><select aria-label="Select camera" value={selectedDevice} onChange={(event) => { setSelectedDevice(event.target.value); void startCamera(event.target.value) }} disabled={!devices.length}><option value="">{devices.length ? 'Select camera' : 'Default camera'}</option>{devices.map((device, index) => <option value={device.deviceId} key={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select><ChevronDown size={14} /></label><button className="text-control" onClick={() => void switchFacing()}><RotateCcw size={14} /> Switch front / rear</button></div>
 
-          <div className="control-group"><div className="group-title">SMART FRAMING <span className="group-live">{trackingOn && aiReady ? 'ACTIVE' : 'MANUAL'}</span></div><div className="toggle-row"><span className="toggle-icon"><Sparkles size={15} /></span><div className="toggle-copy"><strong>Auto framing</strong><small>Follow movement</small></div><button className={`switch ${trackingOn ? 'on' : ''}`} role="switch" aria-checked={trackingOn} aria-label="Toggle auto framing" onClick={() => setTrackingOn((value) => !value)}><i /></button></div><div className="toggle-row"><span className="toggle-icon"><ScanFace size={15} /></span><div className="toggle-copy"><strong>Face tracking</strong><small>Detect faces</small></div><button className={`switch ${faceOn ? 'on' : ''}`} role="switch" aria-checked={faceOn} aria-label="Toggle face tracking" onClick={() => setFaceOn((value) => !value)}><i /></button></div><div className="toggle-row"><span className="toggle-icon"><Focus size={15} /></span><div className="toggle-copy"><strong>Body tracking</strong><small>Follow full posture</small></div><button className={`switch ${bodyOn ? 'on' : ''}`} role="switch" aria-checked={bodyOn} aria-label="Toggle body tracking" onClick={() => setBodyOn((value) => !value)}><i /></button></div></div>
+          <div className="control-group"><div className="group-title">SMART FRAMING <span className="group-live">{trackingOn && aiReady ? 'ACTIVE' : 'MANUAL'}</span></div><div className="toggle-row"><span className="toggle-icon"><Sparkles size={15} /></span><div className="toggle-copy"><strong>Auto framing</strong><small>Follow movement</small></div><button className={`switch ${trackingOn ? 'on' : ''}`} role="switch" aria-checked={trackingOn} aria-label="Toggle auto framing" onClick={() => setTrackingOn((value) => !value)}><i /></button></div><div className="toggle-row"><span className="toggle-icon"><ScanFace size={15} /></span><div className="toggle-copy"><strong>Face tracking</strong><small>Detect faces</small></div><button className={`switch ${faceOn ? 'on' : ''}`} role="switch" aria-checked={faceOn} aria-label="Toggle face tracking" onClick={() => setFaceOn((value) => !value)}><i /></button></div><div className="toggle-row"><span className="toggle-icon"><Focus size={15} /></span><div className="toggle-copy"><strong>Body tracking</strong><small>Follow full posture</small></div><button className={`switch ${bodyOn ? 'on' : ''}`} role="switch" aria-checked={bodyOn} aria-label="Toggle body tracking" onClick={() => setBodyOn((value) => !value)}><i /></button></div><div className="toggle-row"><span className="toggle-icon"><Camera size={15} /></span><div className="toggle-copy"><strong>Auto zoom</strong><small>Widen at frame edges</small></div><button className={`switch ${autoZoom ? 'on' : ''}`} role="switch" aria-checked={autoZoom} aria-label="Toggle auto zoom" onClick={() => setAutoZoom((value) => !value)}><i /></button></div><div className="toggle-row"><span className="toggle-icon"><RotateCcw size={15} /></span><div className="toggle-copy"><strong>Auto rotate</strong><small>Landscape for groups</small></div><button className={`switch ${autoRotate ? 'on' : ''}`} role="switch" aria-checked={autoRotate} aria-label="Toggle auto rotate" onClick={() => setAutoRotate((value) => !value)}><i /></button></div></div>
 
           <div className="control-group compact-group"><div className="range-label"><span>Tracking sensitivity</span><b>{sensitivity}%</b></div><input aria-label="Tracking sensitivity" type="range" min="10" max="100" value={sensitivity} onChange={(event) => setSensitivity(Number(event.target.value))} /><div className="range-hints"><span>STEADY</span><span>RESPONSIVE</span></div></div>
 
           <div className="control-group compact-group"><div className="range-label"><span>Framing zoom</span><b>{zoom.toFixed(1)}×</b></div><input aria-label="Framing zoom" type="range" min="1" max="2.4" step="0.1" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /><div className="range-hints"><span>WIDE</span><span>CLOSE</span></div></div>
 
-          <div className="record-section"><div className="record-head"><div><span className="group-title">RECORDING</span><strong>{recording ? formatTime(recordingSeconds) : 'Capture your moment'}</strong></div><span className={`record-dot ${recording ? 'is-recording' : ''}`} /></div><button className={`record-button ${recording ? 'recording' : ''}`} onClick={toggleRecording} disabled={!cameraOn}>{recording ? <><span className="stop-square" /> Stop recording</> : <><Video size={16} /> Record reframed video</>}</button>{lastRecording && <div className="clip-actions"><button onClick={() => setPreviewMode((value) => !value)}><Play size={13} />{previewMode ? 'Back to camera' : 'Preview clip'}</button><a href={lastRecording.url} download={`centra-recording.${lastRecording.mimeType.includes('mp4') ? 'mp4' : 'webm'}`}><Download size={13} /> Save video</a></div>}</div>
+          <div className="record-section"><div className="record-head"><div><span className="group-title">CAPTURE</span><strong>{recording ? formatTime(recordingSeconds) : 'Capture your moment'}</strong></div><span className={`record-dot ${recording ? 'is-recording' : ''}`} /></div><button className="photo-button" onClick={capturePhoto} disabled={!cameraOn}><Camera size={16} /> Take photo</button><button className={`record-button ${recording ? 'recording' : ''}`} onClick={toggleRecording} disabled={!cameraOn}>{recording ? <><span className="stop-square" /> Stop recording</> : <><Video size={16} /> Record reframed video</>}</button>{lastRecording && <div className="clip-actions"><button onClick={() => setPreviewMode((value) => !value)}><Play size={13} />{previewMode ? 'Back to camera' : 'Preview clip'}</button><a href={lastRecording.url} download={`centra-recording.${lastRecording.mimeType.includes('mp4') ? 'mp4' : 'webm'}`}><Download size={13} /> Save video</a></div>}</div>
 
           <button className="advanced-button" onClick={() => setSettingsOpen((value) => !value)}><Settings2 size={14} /> Camera settings <ChevronDown size={14} className={settingsOpen ? 'rotated' : ''} /></button>
           {settingsOpen && <div className="advanced-panel"><div><span>Resolution</span><b>Adaptive · up to 1280 × 720</b></div><div><span>Processing</span><b>{aiReady ? 'On-device MediaPipe' : 'Loading AI models'}</b></div><div><span>Connection</span><b>{window.isSecureContext ? 'Secure context' : 'HTTPS required for camera'}</b></div></div>}

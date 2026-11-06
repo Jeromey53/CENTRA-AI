@@ -16,14 +16,14 @@ Camera access requires HTTPS or `localhost`. The first studio launch downloads f
 ## Architecture
 
 - `CameraEngine` owns `getUserMedia`, camera selection, and stream cleanup.
-- `AITrackingEngine` runs MediaPipe face and pose detection and combines subject bounds.
-- `CameraStudio` schedules throttled detection, smooths and predicts crop movement, and renders the reframed stream to a canvas.
+- `AITrackingEngine` runs MediaPipe face and pose detection and combines subject bounds and group size.
+- `CameraStudio` schedules throttled detection, smoothly keeps subjects centered, widens framing near the image edges, and switches to landscape for groups.
 - `VideoRecorder` captures the canvas stream with the browser's supported `MediaRecorder` format.
 - `LocalStore` persists camera preferences and recording blobs in IndexedDB.
 - `HomePage` and `CameraStudio` provide the landing and camera interfaces.
 - `public/manifest.webmanifest` and `public/sw.js` provide install metadata and the production app shell.
 
-The canvas is the source for both preview and recording. Audio is intentionally not requested or recorded. The PWA shell is cached locally; camera models are currently fetched from MediaPipe hosting when the studio initializes.
+The canvas is the source for preview, PNG photo capture, and recording, so every capture uses the AI-reframed view. Auto zoom, auto rotate, and other camera preferences are stored locally. Audio is intentionally not requested or recorded. The PWA shell is cached locally; camera models are currently fetched from MediaPipe hosting when the studio initializes.
 
 ## Verify and deploy
 
@@ -34,3 +34,5 @@ npm run preview
 ```
 
 Deploy the Vite output to Vercel or another static host with HTTPS enabled. On iPhone, open the HTTPS deployment in Safari and use **Add to Home Screen**. Browser support depends on that browser's `getUserMedia`, WebAssembly/WebGL, `canvas.captureStream`, and `MediaRecorder` implementations.
+
+The site footer's **Add to home screen** button opens the browser's install prompt when supported, or shows platform-specific steps. On iPhone and iPad, open the HTTPS site in Safari, tap **Share**, then **Add to Home Screen**. Android and desktop browsers offer **Install app** or **Add to Home screen** from the browser menu.

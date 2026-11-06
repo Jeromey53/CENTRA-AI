@@ -7,6 +7,8 @@ export type CameraPreferences = {
   mirror: boolean
   sensitivity: number
   zoom: number
+  autoZoom?: boolean
+  autoRotate?: boolean
 }
 
 let databasePromise: Promise<IDBDatabase> | null = null

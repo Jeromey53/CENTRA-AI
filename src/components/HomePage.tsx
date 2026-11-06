@@ -1,16 +1,70 @@
 import {
-  ArrowDown, ArrowRight, ArrowUpRight, Camera, Focus, ScanFace, ShieldCheck, Sparkles,
+  ArrowDown, ArrowRight, ArrowUpRight, Camera, Download, Focus, ScanFace, ShieldCheck, Sparkles, X,
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 
 type Props = { onLaunch: () => void }
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
 
 function HomePage({ onLaunch }: Props) {
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null)
+  const [appInstalled, setAppInstalled] = useState(() => window.matchMedia('(display-mode: standalone)').matches)
+  const [installHelpOpen, setInstallHelpOpen] = useState(false)
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault()
+      setInstallPrompt(event as InstallPromptEvent)
+    }
+    const onAppInstalled = () => {
+      setAppInstalled(true)
+      setInstallPrompt(null)
+    }
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+    window.addEventListener('appinstalled', onAppInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+      window.removeEventListener('appinstalled', onAppInstalled)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!installHelpOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setInstallHelpOpen(false)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [installHelpOpen])
+
+  const addToHomeScreen = async () => {
+    if (!installPrompt) {
+      setInstallHelpOpen(true)
+      return
+    }
+    try {
+      await installPrompt.prompt()
+      const choice = await installPrompt.userChoice
+      setInstallPrompt(null)
+      if (choice.outcome === 'accepted') setAppInstalled(true)
+      else setInstallHelpOpen(true)
+    } catch {
+      setInstallHelpOpen(true)
+    }
+  }
+
   return (
     <main className="home-page">
       <header className="site-header">
         <a className="wordmark" href="#home" aria-label="CENTRA AI home"><span className="brand-mark"><Focus size={18} /></span>CENTRA<span>AI</span></a>
         <nav className="header-links"><a href="#approach">The approach</a><a href="#privacy">Privacy</a></nav>
-        <button className="header-launch" onClick={onLaunch}>Open studio <ArrowUpRight size={15} /></button>
+        <div className="header-actions">
+          <button className="header-install" onClick={() => void addToHomeScreen()} disabled={appInstalled}><Download size={14} />{appInstalled ? 'Added' : 'Install'}</button>
+          <button className="header-launch" onClick={onLaunch}><span>Open studio</span> <ArrowUpRight size={15} /></button>
+        </div>
       </header>
 
       <section className="hero-section" id="home">
@@ -52,7 +106,17 @@ function HomePage({ onLaunch }: Props) {
       </section>
 
       <section className="closing-band"><div><span className="eyebrow">READY WHEN YOU ARE</span><h2>Step into the frame.</h2></div><button className="primary-button" onClick={onLaunch}><Camera size={17} /> Launch camera <ArrowUpRight size={15} /></button></section>
-      <footer className="site-footer"><a className="wordmark" href="#home"><span className="brand-mark"><Focus size={16} /></span>CENTRA<span>AI</span></a><span>Thoughtful camera technology, made personal.</span><span>YOUR CAMERA. YOUR MOVEMENT.</span></footer>
+      <footer className="site-footer"><a className="wordmark" href="#home"><span className="brand-mark"><Focus size={16} /></span>CENTRA<span>AI</span></a><span className="site-tagline">Thoughtful camera technology, made personal.</span><span className="creator-credit">BUILT BY JERRY JEROME OJONG</span><button className="install-button" onClick={() => void addToHomeScreen()} disabled={appInstalled}><Download size={14} />{appInstalled ? 'Added to home screen' : 'Add to home screen'}</button></footer>
+      {installHelpOpen && <div className="install-backdrop" onClick={() => setInstallHelpOpen(false)}>
+        <section className="install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-title" onClick={(event) => event.stopPropagation()}>
+          <button className="install-close" onClick={() => setInstallHelpOpen(false)} aria-label="Close install instructions"><X size={17} /></button>
+          <span className="eyebrow">TAKE CENTRA WITH YOU</span>
+          <h2 id="install-title">Add CENTRA AI to your home screen</h2>
+          <p>Install this website for a full-screen app experience. You need to open it over HTTPS.</p>
+          <div className="install-steps"><strong>iPhone or iPad</strong><ol><li>Open this page in Safari.</li><li>Tap the Share button.</li><li>Choose <b>Add to Home Screen</b>, then tap <b>Add</b>.</li></ol></div>
+          <div className="install-steps"><strong>Android or desktop</strong><ol><li>Open your browser menu.</li><li>Choose <b>Install app</b> or <b>Add to Home screen</b>.</li></ol></div>
+        </section>
+      </div>}
     </main>
   )
 }
